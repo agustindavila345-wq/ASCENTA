@@ -1,0 +1,70 @@
+name: Scraper Concursos Jujuy
+
+on:
+  schedule:
+    # 12:00 UTC = 09:00 ART, todos los días
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: scraper-concursos-jujuy
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scrapers/concursos-jujuy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Correr scraper
+        run: python scraper_concursos_jujuy.py
+
+      - name: Abrir Issue si hay avisos nuevos de Jujuy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'scrapers/concursos-jujuy/ultima_corrida_resultado.json';
+            if (!fs.existsSync(path)) return;
+            const resultado = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const avisos = resultado.nuevos_jujuy || [];
+            if (avisos.length === 0) return;
+
+            const cuerpo = avisos.map(a =>
+              `### ${a.titulo}\n` +
+              `- CUIT: ${a.cuit || 'no detectado'}\n` +
+              `- URL: ${a.url}\n` +
+              `- Resumen: ${a.resumen}\n`
+            ).join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Concursos/Quiebras Jujuy: ${avisos.length} aviso(s) nuevo(s) - ${new Date().toISOString().slice(0,10)}`,
+              body: cuerpo,
+              labels: ['concursos-jujuy'],
+            });
+
+      - name: Commit y push del estado actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ultima_corrida.json ultima_corrida_resultado.json
+          git diff --cached --quiet || git commit -m "chore: actualizar estado scraper concursos Jujuy"
+          git push
